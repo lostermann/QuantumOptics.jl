@@ -81,6 +81,22 @@ function productoperator{N}(op::ApproximateOperator{N})
 end
 
 function correlationoperator{N}(op::ApproximateOperator{N}, s::CorrelationMask{N})
+    indices = mask2indices(s)
+    # println("indices: ", indices)
+    complement_indices = mask2indices(complement(s))
+    # println("compl indices: ", complement_indices)
+    op_compl = tensor([op.operators[1][indices2mask(N, [i])] for i=complement_indices]...)
+    x = (op_compl ⊗ op.operators[sum(s)][s])
+    # println("x.basis_l shape: ", x.basis_l.shape)
+    # println("x.basis_r shape: ", x.basis_r.shape)
+    # println("reshape: ", [reverse(x.basis_l.shape); reverse(x.basis_r.shape)])
+    data = reshape(x.data, [reverse(x.basis_l.shape); reverse(x.basis_r.shape)]...)
+    # println(size(data))
+    perm = [complement_indices; indices; complement_indices+N; indices+N]
+    # println("permutation", perm)
+    data = permutedims(data, [complement_indices; indices; complement_indices+N; indices+N])
+    # println(size(data))
+    DenseOperator(op.basis_l, op.basis_r, reshape(data, length(op.basis_l), length(op.basis_r)))
 end
 
 function full{N}(op::ApproximateOperator{N})
