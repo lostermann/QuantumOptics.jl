@@ -35,10 +35,16 @@ in the *operators* field. The layout of this field is the following:
 type ApproximateOperator{N} <: Operator
     basis_l::CompositeBasis
     basis_r::CompositeBasis
-    operators::NTuple{N, Dict{CorrelationMask{N}, Operator}}
+    operators::NTuple{N, Operator}
+    correlations::Dict{CorrelationMask{N}, Operator}
 
-    function ApproximateOperator(basis_l::CompositeBasis, basis_r::CompositeBasis, operators::NTuple{N, Dict{CorrelationMask{N}, Operator}})
+    function ApproximateOperator(basis_l::CompositeBasis, basis_r::CompositeBasis,
+                operators::NTuple{N, Operator}, correlations::Dict{CorrelationMask{N}, Operator})
         @assert N == length(basis_l.bases) == length(basis_r.bases)
+        for i=1:N
+            @assert basis_op.basis_l[i] == basis_l[i]
+            @assert basis_op.basis_r[i] == basis_r[i]
+        end
         for n=1:N
             for (indices, op) in operators[n]
                 @assert sum(indices)==n
