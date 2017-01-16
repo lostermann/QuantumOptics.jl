@@ -18,8 +18,9 @@ mask2indices{N}(mask::CorrelationMask{N}) = Int[i for i=1:N if mask[i]]
 complement(N::Int, indices::Vector{Int}) = Int[i for i=1:N if i ∉ indices]
 complement{N}(mask::CorrelationMask{N}) = tuple([! x for x in mask]...)
 
-correlationindices(N, order) = Set(combinations(1:N, order))
-correlationmasks(N, order) = Set(indices2mask(N, indices) for indices in correlationindices(N, order))
+correlationindices(N::Int, order::Int) = Set(combinations(1:N, order))
+correlationmasks(N::Int, order::Int) = Set(indices2mask(N, indices) for indices in correlationindices(N, order))
+correlationmasks(S::Set{CorrelationMask{N}}, order::Int) = Set(s for s in S if sum(s)==order)
 
 """
 An operator using only certain correlations.
@@ -45,74 +46,90 @@ type ApproximateOperator{N} <: Operator
             @assert basis_op.basis_l[i] == basis_l[i]
             @assert basis_op.basis_r[i] == basis_r[i]
         end
-        for n=1:N
-            for (indices, op) in operators[n]
-                @assert sum(indices)==n
-                @assert length(op.basis_l.shape)==n
-                @assert length(op.basis_r.shape)==n
-                b_l = tensor([basis_l.bases[i] for i=1:N if indices[i]]...)
-                b_r = tensor([basis_r.bases[i] for i=1:N if indices[i]]...)
-                @assert b_l == op.basis_l
-                @assert b_r == op.basis_r
-            end
+        for (mask, op) in correlations
+            @assert sum(mask) > 1
+            @assert b_l == tensor([basis_l.bases[[mask...]]...)
+            @assert b_r == tensor([basis_r.bases[[mask...]]...)
         end
         new(basis_l, basis_r, operators)
     end
 end
 
 function ApproximateOperator{N}(basis_l::CompositeBasis, basis_r::CompositeBasis, S::Set{CorrelationMask{N}})
-    operators = tuple([Dict{CorrelationMask{N}, Operator}() for i=1:N]...)
-    S_1 = correlationmasks(N, 1)
-    for s in S ∪ S_1
-        indices = mask2indices(s)
-        op = tensor([DenseOperator(basis_l.bases[i], basis_r.bases[i]) for i in indices]...)
-        operators[sum(s)][s] = op
+    operators = [DenseOperator(basis_l.bases[i], basis_r.bases[r]) for i=1:N]
+    correlations = Dict{CorrelationMask{N}, Operator}()
+    for mask in S
+        @assert sum(mask) > 1
+        correlations[mask] = tensor(operators[[mask...]]...)
     end
-    ApproximateOperator{N}(basis_l, basis_r, operators)
+    ApproximateOperator{N}(basis_l, basis_r, operators, correlations)
+end
+
+function permutesubsystems(rho::DenseOperator, perm)
+    data = reshape(rho.data, [reverse(rho.basis_l.shape); reverse(rho.basis_r.shape)]...)
+    data = permutedims(data, [perm; perm+N])
+    data = reshape(data, length(op.basis_l), length(op.basis_r))
+    DenseOperator(op.basis_l, op.basis_r, data)
 end
 
 ApproximateOperator{N}(basis::CompositeBasis, S::Set{CorrelationMask{N}}) = ApproximateOperator(basis, basis, S)
 
-function ApproximateOperator{N}(op::DenseOperator, S::Set{CorrelationMask{N}})
-    operators = tuple([Dict{CorrelationMask{N}, Operator}() for i=1:N]...)
-    S_1 = correlationmasks(N, 1)
-    for s in S ∪ S_1
-        operators[sum(s)][s] = ptrace(op, mask2indices(complement(s)))
-    end
-    ApproximateOperator{N}(op.basis_l, op.basis_r, operators)
-end
+setdiff{N}(x::CorrelationMask{N}, y::CorrelationMask{N}) = ([x[i] && !y[i] for i =1:N]...)
 
-function productoperator{N}(op::ApproximateOperator{N})
-    tensor([op.operators[1][indices2mask(N, [i])] for i=1:N]...)
-end
 
-function correlationoperator{N}(op::ApproximateOperator{N}, s::CorrelationMask{N})
-    indices = mask2indices(s)
-    # println("indices: ", indices)
-    complement_indices = mask2indices(complement(s))
-    # println("compl indices: ", complement_indices)
-    op_compl = tensor([op.operators[1][indices2mask(N, [i])] for i=complement_indices]...)
-    x = (op_compl ⊗ op.operators[sum(s)][s])
-    # println("x.basis_l shape: ", x.basis_l.shape)
-    # println("x.basis_r shape: ", x.basis_r.shape)
-    # println("reshape: ", [reverse(x.basis_l.shape); reverse(x.basis_r.shape)])
-    data = reshape(x.data, [reverse(x.basis_l.shape); reverse(x.basis_r.shape)]...)
-    # println(size(data))
-    perm = [complement_indices; indices; complement_indices+N; indices+N]
-    # println("permutation", perm)
-    data = permutedims(data, [complement_indices; indices; complement_indices+N; indices+N])
-    # println(size(data))
-    DenseOperator(op.basis_l, op.basis_r, reshape(data, length(op.basis_l), length(op.basis_r)))
-end
-
-function full{N}(op::ApproximateOperator{N})
-    result = DenseOperator(op.basis_l, op.basis_r)
-    for n=2:N
-        for s in keys(op.operators[n])
-            result += correlationoperator(op, s)
+function ApproximateOperator{N}(rho::DenseOperator, S::Set{CorrelationMask{N}})
+    operators = [ptrace(rho, complement(N, [i])) for i=1:N]
+    correlations = Dict{CorrelationMask{N}, Operator}()
+    for k=2:N
+        for s_k in correlationmasks(S, k)
+            σ_sk = ptrace(rho, mask2indices(complement(s_k)))
+            σ_sk -= tensor(operators[[s_k...]]...)
+            for s_n in keys(correlations)
+                if s_n ⊆ s_k
+                    s_x = setdiff(complement(s_n), complement(s_k))
+                    ρ_sx = tensor(operators[[x...]]...)
+                    σ_sn = correlations[s_n]
+                    op = ρ_sx ⊗ σ_sn # subsystems in wrong order
+                    σ_sk -= permutesubsystems(op, [mask2indices(s_x); mask2indices(s_n)])
+                end
+            end
+            correlations[s_k] = σ_sk
         end
     end
-    result
+    ApproximateOperator{N}(op.basis_l, op.basis_r, operators, correlations)
 end
+
+# function productoperator{N}(op::ApproximateOperator{N})
+#     tensor([op.operators[1][indices2mask(N, [i])] for i=1:N]...)
+# end
+
+# function correlationoperator{N}(op::ApproximateOperator{N}, s::CorrelationMask{N})
+#     indices = mask2indices(s)
+#     # println("indices: ", indices)
+#     complement_indices = mask2indices(complement(s))
+#     # println("compl indices: ", complement_indices)
+#     op_compl = tensor([op.operators[1][indices2mask(N, [i])] for i=complement_indices]...)
+#     x = (op_compl ⊗ op.operators[sum(s)][s])
+#     # println("x.basis_l shape: ", x.basis_l.shape)
+#     # println("x.basis_r shape: ", x.basis_r.shape)
+#     # println("reshape: ", [reverse(x.basis_l.shape); reverse(x.basis_r.shape)])
+#     data = reshape(x.data, [reverse(x.basis_l.shape); reverse(x.basis_r.shape)]...)
+#     # println(size(data))
+#     perm = [complement_indices; indices; complement_indices+N; indices+N]
+#     # println("permutation", perm)
+#     data = permutedims(data, [complement_indices; indices; complement_indices+N; indices+N])
+#     # println(size(data))
+#     DenseOperator(op.basis_l, op.basis_r, reshape(data, length(op.basis_l), length(op.basis_r)))
+# end
+
+# function full{N}(op::ApproximateOperator{N})
+#     result = DenseOperator(op.basis_l, op.basis_r)
+#     for n=2:N
+#         for s in keys(op.operators[n])
+#             result += correlationoperator(op, s)
+#         end
+#     end
+#     result
+# end
 
 end
