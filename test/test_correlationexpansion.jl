@@ -29,57 +29,11 @@ psi3 = normalize(nlevelstate(b3, 1) + nlevelstate(b3, 2))
 rho1 = 0.1*psi1a ⊗ dagger(psi1a) + 0.9*psi1b ⊗ dagger(psi1b)
 rho2 = 0.3*psi2a ⊗ dagger(psi2a) + 0.7*psi2b ⊗ dagger(psi2b)
 rho3 = psi3 ⊗ dagger(psi3)
+rho = rho1 ⊗ rho2 ⊗ rho3
 # rho = psi ⊗ dagger(psi)
-
-# x = correlationexpansion.ApproximateOperator(rho, S2)
-# s1 = (true, false, false)
-# # x1 = x.operators[1][s1]
-# # s2 = (false, true, false)
-# # x2 = x.operators[1][s2]
-# # s3 = (false, false, true)
-# # x3 = x.operators[1][s3]
-
-# # @test_approx_eq_eps 0. tracedistance(rho1, x1) 1e-10
-# # @test_approx_eq_eps 0. tracedistance(rho2, x2) 1e-10
-# # @test_approx_eq_eps 0. tracedistance(rho3, x3) 1e-10
-
-function f(x)
-    x = map(Int32, ceil(real(x)))
-    for i=1:size(x,1)
-        for j=1:size(x,2)
-            print(x[i,j], " ")
-        end
-        println()
-    end
-    println()
+println(methods(correlationexpansion.ApproximateOperator))
+x = correlationexpansion.ApproximateOperator(rho, S2 ∪ S3)
+for (c, sigma) in x.correlations
+    println(correlationexpansion.mask2indices(c), ": ", sum(real(sigma.data)))
+    # println(sum(abs(x.correlations[(true, true, true)].data)))
 end
-
-# # 3 2 4
-
-N1 = 3
-N2 = 2
-N3 = 4
-
-# A = (rho2 ⊗ rho3 ⊗ rho1).data
-# A = reshape(A, 3, 4, 2, 3, 4, 2)
-# A = ipermutedims(A, [3, 1, 2, 6, 4, 5])
-# A = reshape(A, 24, 24)
-
-A = (rho2 ⊗ rho1 ⊗ rho3).data
-A = reshape(A, N3, N1, N2, N3, N1, N2)
-A = permutedims(A, [1, 3, 2, 4, 6, 5])
-A = reshape(A, 24, 24)
-
-B = (rho1 ⊗ rho2 ⊗ rho3).data
-# f(A)
-# f(B)
-println(sum(abs(A-B)))
-
-# # rho_ = correlationexpansion.correlationoperator(x, s1)
-# rho_ = correlationexpansion.full(x)
-# # println(rho.basis_l.shape, rho.basis_r.shape)
-# # println(tracedistance(rho_, rho))
-
-# f(rho.data)
-# println()
-# f(rho_.data)

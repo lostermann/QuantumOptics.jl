@@ -39,8 +39,9 @@ type ApproximateOperator{N} <: Operator
     operators::NTuple{N, Operator}
     correlations::Dict{CorrelationMask{N}, Operator}
 
-    function ApproximateOperator(basis_l::CompositeBasis, basis_r::CompositeBasis,
-                operators::NTuple{N, Operator}, correlations::Dict{CorrelationMask{N}, Operator})
+    function ApproximateOperator{N}(basis_l::CompositeBasis, basis_r::CompositeBasis,
+                operators::NTuple{N, DenseOperator},
+                correlations::Dict{CorrelationMask{N}, DenseOperator})
         @assert N == length(basis_l.bases) == length(basis_r.bases)
         for i=1:N
             @assert operators[i].basis_l == basis_l.bases[i]
@@ -57,7 +58,7 @@ end
 
 function ApproximateOperator{N}(basis_l::CompositeBasis, basis_r::CompositeBasis, S::Set{CorrelationMask{N}})
     operators = ([DenseOperator(basis_l.bases[i], basis_r.bases[i]) for i=1:N]...)
-    correlations = Dict{CorrelationMask{N}, Operator}()
+    correlations = Dict{CorrelationMask{N}, DenseOperator}()
     for mask in S
         @assert sum(mask) > 1
         correlations[mask] = tensor(operators[[mask...]]...)
@@ -74,25 +75,30 @@ maskdiff{N}(x::CorrelationMask{N}, y::CorrelationMask{N}) = ([x[i] && !y[i] for 
 
 
 function ApproximateOperator{N}(rho::DenseOperator, S::Set{CorrelationMask{N}})
-    operators = [ptrace(rho, complement(N, [i])) for i=1:N]
-    correlations = Dict{CorrelationMask{N}, Operator}()
+    operators = ([ptrace(rho, complement(N, [i])) for i=1:N]...)
+    correlations = Dict{CorrelationMask{N}, DenseOperator}()
     for k=2:N
         for s_k in correlationmasks(S, k)
             σ_sk = ptrace(rho, mask2indices(complement(s_k)))
             σ_sk -= tensor(operators[[s_k...]]...)
             for s_n in keys(correlations)
-                if s_n ⊆ s_k
+                if mask2indices(s_n) ⊆ mask2indices(s_k)
+                    println("s_n: ", mask2indices(s_n))
+                    println("s_k: ", mask2indices(s_k))
                     s_x = maskdiff(complement(s_n), complement(s_k))
+                    println("s_x: ", mask2indices(s_x))
                     ρ_sx = tensor(operators[[s_x...]]...)
                     σ_sn = correlations[s_n]
-                    op = ρ_sx ⊗ σ_sn # subsystems in wrong order
-                    σ_sk -= permutesubsystems(op, [mask2indices(s_x); mask2indices(s_n)])
+                    op = σ_sn ⊗ ρ_sx  # subsystems in wrong order
+                    perm = sortperm([mask2indices(s_n); mask2indices(s_x)])
+                    println("perm: ", perm)
+                    σ_sk -= permutesystems(op, perm)
                 end
             end
             correlations[s_k] = σ_sk
         end
     end
-    ApproximateOperator{N}(op.basis_l, op.basis_r, operators, correlations)
+    ApproximateOperator{N}(rho.basis_l, rho.basis_r, operators, correlations)
 end
 
 # function productoperator{N}(op::ApproximateOperator{N})
