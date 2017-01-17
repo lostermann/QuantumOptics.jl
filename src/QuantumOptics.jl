@@ -3,12 +3,12 @@ __precompile__()
 module QuantumOptics
 
 export bases, Basis, GenericBasis, CompositeBasis,
-        tensor, ⊗,
+        tensor, ⊗, permutebases,
         states, StateVector, Bra, Ket, basis_bra, basis_ket,
                 dagger, normalize, normalize!,
         operators, Operator, DenseOperator, projector,
                 expect, identityoperator, dense_identityoperator,
-                ptrace, embed,
+                ptrace, embed, permutesystems,
         operators_lazy, LazyOperator, LazyTensor, LazySum, LazyProduct,
         operators_sparse, SparseOperator,
                 sparse_identityoperator, diagonaloperator,
