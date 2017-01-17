@@ -20,7 +20,7 @@ complement{N}(mask::CorrelationMask{N}) = tuple([! x for x in mask]...)
 
 correlationindices(N::Int, order::Int) = Set(combinations(1:N, order))
 correlationmasks(N::Int, order::Int) = Set(indices2mask(N, indices) for indices in correlationindices(N, order))
-correlationmasks(S::Set{CorrelationMask{N}}, order::Int) = Set(s for s in S if sum(s)==order)
+correlationmasks{N}(S::Set{CorrelationMask{N}}, order::Int) = Set(s for s in S if sum(s)==order)
 
 """
 An operator using only certain correlations.
@@ -43,20 +43,20 @@ type ApproximateOperator{N} <: Operator
                 operators::NTuple{N, Operator}, correlations::Dict{CorrelationMask{N}, Operator})
         @assert N == length(basis_l.bases) == length(basis_r.bases)
         for i=1:N
-            @assert basis_op.basis_l[i] == basis_l[i]
-            @assert basis_op.basis_r[i] == basis_r[i]
+            @assert operators[i].basis_l == basis_l.bases[i]
+            @assert operators[i].basis_r == basis_r.bases[i]
         end
         for (mask, op) in correlations
             @assert sum(mask) > 1
-            @assert b_l == tensor([basis_l.bases[[mask...]]...)
-            @assert b_r == tensor([basis_r.bases[[mask...]]...)
+            @assert op.basis_l == tensor(basis_l.bases[[mask...]]...)
+            @assert op.basis_r == tensor(basis_r.bases[[mask...]]...)
         end
-        new(basis_l, basis_r, operators)
+        new(basis_l, basis_r, operators, correlations)
     end
 end
 
 function ApproximateOperator{N}(basis_l::CompositeBasis, basis_r::CompositeBasis, S::Set{CorrelationMask{N}})
-    operators = [DenseOperator(basis_l.bases[i], basis_r.bases[r]) for i=1:N]
+    operators = ([DenseOperator(basis_l.bases[i], basis_r.bases[i]) for i=1:N]...)
     correlations = Dict{CorrelationMask{N}, Operator}()
     for mask in S
         @assert sum(mask) > 1
@@ -65,16 +65,12 @@ function ApproximateOperator{N}(basis_l::CompositeBasis, basis_r::CompositeBasis
     ApproximateOperator{N}(basis_l, basis_r, operators, correlations)
 end
 
-function permutesubsystems(rho::DenseOperator, perm)
-    data = reshape(rho.data, [reverse(rho.basis_l.shape); reverse(rho.basis_r.shape)]...)
-    data = permutedims(data, [perm; perm+N])
-    data = reshape(data, length(op.basis_l), length(op.basis_r))
-    DenseOperator(op.basis_l, op.basis_r, data)
-end
+
+
 
 ApproximateOperator{N}(basis::CompositeBasis, S::Set{CorrelationMask{N}}) = ApproximateOperator(basis, basis, S)
 
-setdiff{N}(x::CorrelationMask{N}, y::CorrelationMask{N}) = ([x[i] && !y[i] for i =1:N]...)
+maskdiff{N}(x::CorrelationMask{N}, y::CorrelationMask{N}) = ([x[i] && !y[i] for i =1:N]...)
 
 
 function ApproximateOperator{N}(rho::DenseOperator, S::Set{CorrelationMask{N}})
@@ -86,8 +82,8 @@ function ApproximateOperator{N}(rho::DenseOperator, S::Set{CorrelationMask{N}})
             σ_sk -= tensor(operators[[s_k...]]...)
             for s_n in keys(correlations)
                 if s_n ⊆ s_k
-                    s_x = setdiff(complement(s_n), complement(s_k))
-                    ρ_sx = tensor(operators[[x...]]...)
+                    s_x = maskdiff(complement(s_n), complement(s_k))
+                    ρ_sx = tensor(operators[[s_x...]]...)
                     σ_sn = correlations[s_n]
                     op = ρ_sx ⊗ σ_sn # subsystems in wrong order
                     σ_sk -= permutesubsystems(op, [mask2indices(s_x); mask2indices(s_n)])
