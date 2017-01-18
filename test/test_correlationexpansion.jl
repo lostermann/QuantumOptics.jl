@@ -17,7 +17,7 @@ b2 = SpinBasis(1//2)
 b3 = NLevelBasis(4)
 b = tensor(b1, b2, b3)
 
-rho = correlationexpansion.approximate(b, b, S2 ∪ S3)
+rho = correlationexpansion.ApproximateOperator(b, b, S2 ∪ S3)
 
 psi1a = normalize(coherentstate(b1, 0.1))
 psi1b = fockstate(b1, 1)
@@ -37,3 +37,5 @@ for (c, sigma) in x.correlations
     println(correlationexpansion.mask2indices(c), ": ", sum(real(sigma.data)))
     # println(sum(abs(x.correlations[(true, true, true)].data)))
 end
+
+println(tracedistance(correlationexpansion.full(x), rho))

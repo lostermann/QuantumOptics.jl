@@ -1,6 +1,6 @@
 module correlationexpansion
 
-using Combinatorics
+using Combinatorics, Iterators
 using ..bases
 # using ..states
 using ..operators
@@ -10,38 +10,41 @@ using ..operators
 # import Base: *, full
 # import ..operators
 
-typealias CorrelationMask{N} NTuple{N, Bool}
+typealias Mask{N} NTuple{N, Bool}
 
-indices2mask(N::Int, indices::Vector{Int}) = CorrelationMask(tuple([(i in indices) for i=1:N]...))
-mask2indices{N}(mask::CorrelationMask{N}) = Int[i for i=1:N if mask[i]]
+indices2mask(N::Int, indices::Vector{Int}) = Mask(tuple([(i in indices) for i=1:N]...))
+mask2indices{N}(mask::Mask{N}) = Int[i for i=1:N if mask[i]]
 
 complement(N::Int, indices::Vector{Int}) = Int[i for i=1:N if i ∉ indices]
-complement{N}(mask::CorrelationMask{N}) = tuple([! x for x in mask]...)
+complement{N}(mask::Mask{N}) = tuple([! x for x in mask]...)
 
 correlationindices(N::Int, order::Int) = Set(combinations(1:N, order))
-correlationmasks(N::Int, order::Int) = Set(indices2mask(N, indices) for indices in correlationindices(N, order))
-correlationmasks{N}(S::Set{CorrelationMask{N}}, order::Int) = Set(s for s in S if sum(s)==order)
+correlationmasks(N::Int, order::Int) = Set(indices2mask(N, indices) for indices in
+        correlationindices(N, order))
+correlationmasks{N}(S::Set{Mask{N}}, order::Int) = Set(s for s in S if sum(s)==order)
+subcorrelationmasks{N}(mask::Mask{N}) = Set(indices2mask(N, indices) for indices in
+        chain([combinations(mask2indices(mask), k) for k=2:sum(mask)-1]...))
+
 
 """
-An operator using only certain correlations.
+An operator including only certain correlations.
 
-It stores all subsystem density operators
-:math:`\\rho^{(\\alpha)}` and correlation operators :math:`\\rho^{s_n}`
-in the *operators* field. The layout of this field is the following:
-
-* operators: (D_1, ..., D_N)
-* D_n: Dict(s_n->rho^{s_n})
-* s_n are CorrelationMask where exactly n subsystems are included.
+operators
+    A tuple containing the reduced density matrix of each subsystem.
+correlations
+    A (mask->operator) dict. A mask is a tuple containing booleans which
+    indicate if the corresponding subsystem is included in the correlation.
+    The operator is the correlation between the specified subsystems.
 """
 type ApproximateOperator{N} <: Operator
     basis_l::CompositeBasis
     basis_r::CompositeBasis
     operators::NTuple{N, Operator}
-    correlations::Dict{CorrelationMask{N}, Operator}
+    correlations::Dict{Mask{N}, Operator}
 
     function ApproximateOperator{N}(basis_l::CompositeBasis, basis_r::CompositeBasis,
                 operators::NTuple{N, DenseOperator},
-                correlations::Dict{CorrelationMask{N}, DenseOperator})
+                correlations::Dict{Mask{N}, DenseOperator})
         @assert N == length(basis_l.bases) == length(basis_r.bases)
         for i=1:N
             @assert operators[i].basis_l == basis_l.bases[i]
@@ -56,9 +59,9 @@ type ApproximateOperator{N} <: Operator
     end
 end
 
-function approximate{N}(basis_l::CompositeBasis, basis_r::CompositeBasis, S::Set{CorrelationMask{N}})
+function ApproximateOperator{N}(basis_l::CompositeBasis, basis_r::CompositeBasis, S::Set{Mask{N}})
     operators = ([DenseOperator(basis_l.bases[i], basis_r.bases[i]) for i=1:N]...)
-    correlations = Dict{CorrelationMask{N}, DenseOperator}()
+    correlations = Dict{Mask{N}, DenseOperator}()
     for mask in S
         @assert sum(mask) > 1
         correlations[mask] = tensor(operators[[mask...]]...)
@@ -66,65 +69,107 @@ function approximate{N}(basis_l::CompositeBasis, basis_r::CompositeBasis, S::Set
     ApproximateOperator{N}(basis_l, basis_r, operators, correlations)
 end
 
+ApproximateOperator{N}(basis::CompositeBasis, S::Set{Mask{N}}) = ApproximateOperator(basis, basis, S)
 
 
+"""
+Tensor product of a correlation and the density operators of the other subsystems.
 
-approximate{N}(basis::CompositeBasis, S::Set{CorrelationMask{N}}) = ApproximateOperator(basis, basis, S)
+Arguments
+---------
+operators
+    Tuple containing the reduced density operators of each subsystem.
+mask
+    A tuple containing booleans specifying if the n-th subsystem is included
+    in the correlation.
+correlation
+    Correlation operator for the subsystems specified by the given mask.
+"""
+function embedcorrelation{N}(operators::NTuple{N, DenseOperator}, mask::Mask{N},
+            correlation::DenseOperator)
+    # Product density operator of all subsystems not included in the correlation.
+    if sum(mask) == N
+        return correlation
+    end
+    ρ = tensor(operators[[complement(mask)...]]...)
+    op = correlation ⊗ ρ # Subsystems are now in wrong order
+    perm = sortperm([mask2indices(mask); mask2indices(complement(mask))])
+    permutesystems(op, perm)
+end
 
-maskdiff{N}(x::CorrelationMask{N}, y::CorrelationMask{N}) = ([x[i] && !y[i] for i =1:N]...)
+"""
+Calculate the correlation of the subsystems specified by the given index mask.
+
+Arguments
+---------
+rho
+    Density operator of the total system.
+mask
+    A tuple containing booleans specifying if the n-th subsystem is included
+    in the correlation.
+
+Optional Arguments
+------------------
+operators
+    A tuple containing the reduced density operators of the single subsystems.
+subcorrelations
+    A (mask->operator) dictionary storing already calculated correlations.
+"""
+function correlation{N}(rho::DenseOperator, mask::Mask{N};
+            operators::NTuple{N, DenseOperator}=([ptrace(rho, complement(N, [i]))
+                                                  for i in 1:N]...),
+            subcorrelations::Dict{Mask{N}, DenseOperator}=Dict())
+    # Check if this correlation was already calculated.
+    if mask in keys(subcorrelations)
+        return subcorrelations[mask]
+    end
+    order = sum(mask)
+    σ = ptrace(rho, mask2indices(complement(mask)))
+    σ -= tensor(operators[[mask...]]...)
+    for submask in subcorrelationmasks(mask)
+        subcorrelation = correlation(rho, submask;
+                                     operators=operators,
+                                     subcorrelations=subcorrelations)
+        σ -= embedcorrelation((operators[[mask...]]...), submask[[mask...]], subcorrelation)
+    end
+    subcorrelations[mask] = σ
+    σ
+end
+
+correlation{N}(rho::ApproximateOperator{N}, mask::Mask{N}) = rho.correlations[mask]
 
 
-function approximate{N}(rho::DenseOperator, S::Set{CorrelationMask{N}})
-    operators = ([ptrace(rho, complement(N, [i])) for i=1:N]...)
-    correlations = Dict{CorrelationMask{N}, DenseOperator}()
-    for k=2:N
-        for s_k in correlationmasks(S, k)
-            σ_sk = ptrace(rho, mask2indices(complement(s_k)))
-            σ_sk -= tensor(operators[[s_k...]]...)
-            for s_n in keys(correlations)
-                if mask2indices(s_n) ⊆ mask2indices(s_k)
-                    s_x = maskdiff(complement(s_n), complement(s_k))
-                    ρ_sx = tensor(operators[[s_x...]]...)
-                    σ_sn = correlations[s_n]
-                    op = σ_sn ⊗ ρ_sx  # subsystems in wrong order
-                    perm = sortperm([mask2indices(s_n); mask2indices(s_x)])
-                    σ_sk -= permutesystems(op, perm)
-                end
-            end
-            correlations[s_k] = σ_sk
-        end
+"""
+Approximate a density operator by including only certain correlations.
+
+Arguments
+---------
+rho
+    The density operator that should be approximated.
+masks
+    A set containing an index mask for every correlation that should be
+    included. A index mask is a tuple consisting of booleans which indicate
+    if the n-th subsystem is included in the correlation.
+"""
+function approximate{N}(rho::DenseOperator, masks::Set{Mask{N}})
+    operators = ([ptrace(rho, complement(N, [i])) for i in 1:N]...)
+    subcorrelations = Dict{Mask{N}, DenseOperator}() # Dictionary to store intermediate results
+    correlations = Dict{Mask{N}, DenseOperator}()
+    for mask in masks
+        correlations[mask] = correlation(rho, mask;
+                                         operators=operators,
+                                         subcorrelations=subcorrelations)
     end
     ApproximateOperator{N}(rho.basis_l, rho.basis_r, operators, correlations)
 end
 
 
-# function correlationoperator{N}(op::ApproximateOperator{N}, s::CorrelationMask{N})
-#     indices = mask2indices(s)
-#     # println("indices: ", indices)
-#     complement_indices = mask2indices(complement(s))
-#     # println("compl indices: ", complement_indices)
-#     op_compl = tensor([op.operators[1][indices2mask(N, [i])] for i=complement_indices]...)
-#     x = (op_compl ⊗ op.operators[sum(s)][s])
-#     # println("x.basis_l shape: ", x.basis_l.shape)
-#     # println("x.basis_r shape: ", x.basis_r.shape)
-#     # println("reshape: ", [reverse(x.basis_l.shape); reverse(x.basis_r.shape)])
-#     data = reshape(x.data, [reverse(x.basis_l.shape); reverse(x.basis_r.shape)]...)
-#     # println(size(data))
-#     perm = [complement_indices; indices; complement_indices+N; indices+N]
-#     # println("permutation", perm)
-#     data = permutedims(data, [complement_indices; indices; complement_indices+N; indices+N])
-#     # println(size(data))
-#     DenseOperator(op.basis_l, op.basis_r, reshape(data, length(op.basis_l), length(op.basis_r)))
-# end
-
-# function full{N}(op::ApproximateOperator{N})
-#     result = DenseOperator(op.basis_l, op.basis_r)
-#     for n=2:N
-#         for s in keys(op.operators[n])
-#             result += correlationoperator(op, s)
-#         end
-#     end
-#     result
-# end
+function full{N}(rho::ApproximateOperator{N})
+    result = tensor(rho.operators...)
+    for (mask, correlation) in rho.correlations
+        result += embedcorrelation(rho.operators, mask, correlation)
+    end
+    result
+end
 
 end
